@@ -1,0 +1,5 @@
+{
+  "name": "Smart Dashboard",
+  "description": "A standalone React dashboard for task management, event tracking, and daily organization. Features auto-resetting tasks, keyboard shortcuts, and a persistent local state.",
+  "requestFramePermissions": []
+}
