@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=0">
+    <title>Care Board (No AI)</title>
+    <link rel="manifest" href="manifest.json">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap" rel="stylesheet">
+    <style>
+        :root { --bg: #0f172a; --panel: #1e293b; --text: #f8fafc; --accent: #3b82f6; --done: #22c55e; --radius: 24px; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; outline: none; }
+        body { margin: 0; font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); overflow-x: hidden; padding: 20px; }
+        .header { text-align: center; padding: 40px 0; }
+        .clock { font-size: 8rem; font-weight: 700; line-height: 1; margin: 0; }
+        .date { font-size: 2rem; color: #94a3b8; margin-top: 10px; }
+        .dashboard { display: grid; grid-template-columns: 350px 1fr; gap: 30px; max-width: 1200px; margin: 0 auto; }
+        .panel { background: var(--panel); border-radius: var(--radius); padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+        h1 { font-size: 2.5rem; margin: 0 0 20px 0; border-bottom: 2px solid #334155; padding-bottom: 10px; font-weight: 700; }
+        
+        .task-item { 
+            display: flex; align-items: center; background: rgba(0,0,0,0.2); 
+            margin-bottom: 15px; padding: 25px; border-radius: 20px; 
+            cursor: pointer; border: 4px solid transparent; transition: all 0.2s; 
+        }
+        /* Visual Selection Logic */
+        .task-item.selected { border-color: var(--accent); box-shadow: 0 0 20px rgba(59, 130, 246, 0.4); transform: scale(1.02); background: rgba(59, 130, 246, 0.1); }
+        .task-item.done { opacity: 0.6; }
+        .task-item.done.selected { border-color: var(--done); }
+        
+        .check-circle { width: 50px; height: 50px; border-radius: 50%; border: 4px solid #475569; margin-right: 25px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 1.5rem; font-weight: bold; }
+        .done .check-circle { background: var(--done); border-color: var(--done); color: white; }
+        .task-title { font-size: 2.2rem; font-weight: 700; display: block; }
+        .task-time { font-size: 1.3rem; color: #94a3b8; }
+        .event-item { padding: 15px 0; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; font-size: 1.5rem; }
+        @media (max-width: 900px) { .dashboard { grid-template-columns: 1fr; } .clock { font-size: 5rem; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div id="clock" class="clock">00:00</div>
+        <div id="date" class="date">Loading...</div>
+    </div>
+    <div class="dashboard">
+        <div class="panel"><h1>Coming Up</h1><div id="event-list"></div></div>
+        <div class="panel"><h1>To Do Today</h1><div id="task-list"></div></div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getDatabase, ref, onValue, update, get } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAsWZsD7fhUc2PVq5GVLzP3Yl6Ql3e0EqE",
+            authDomain: "task-timer---srdesign.firebaseapp.com",
+            databaseURL: "https://task-timer---srdesign-default-rtdb.firebaseio.com",
+            projectId: "task-timer---srdesign",
+            appId: "1:175833633602:web:0a725a7ede85bdc1b42edb"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        let currentTasks = [];
+        let selectedIndex = 0;
+        let appSettings = { auto_reset: false, reset_time: "00:00", last_reset_date: "" };
+
+        onValue(ref(db, 'settings'), s => { if(s.val()) appSettings = {...appSettings, ...s.val()}; });
+
+        setInterval(() => {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            const dateStr = now.toISOString().split('T')[0];
+            document.getElementById('clock').innerText = timeStr;
+            document.getElementById('date').innerText = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+            if (appSettings.auto_reset && timeStr >= appSettings.reset_time && dateStr !== appSettings.last_reset_date) {
+                performAutoReset(dateStr);
+            }
+        }, 1000);
+
+        async function performAutoReset(today) {
+            await update(ref(db, 'settings'), { last_reset_date: today });
+            const snap = await get(ref(db, 'tasks'));
+            if (snap.val()) {
+                const up = {};
+                Object.keys(snap.val()).forEach(id => { up[`tasks/${id}/done`] = false; up[`tasks/${id}/completedAt`] = ""; });
+                update(ref(db), up);
+            }
+        }
+
+        onValue(ref(db, 'tasks'), (snapshot) => {
+            const data = snapshot.val();
+            const list = document.getElementById('task-list');
+            list.innerHTML = '';
+            if (data) {
+                // Keep tasks in strict time order only
+                currentTasks = Object.entries(data).sort((a,b) => a[1].due_time.localeCompare(b[1].due_time));
+                renderTasks();
+            }
+        });
+
+        function renderTasks() {
+            const list = document.getElementById('task-list');
+            list.innerHTML = '';
+            currentTasks.forEach(([id, t], index) => {
+                const div = document.createElement('div');
+                div.className = `task-item ${t.done ? 'done' : ''} ${index === selectedIndex ? 'selected' : ''}`;
+                div.onclick = () => handleToggle(id, t.done, index);
+                div.innerHTML = `<div class="check-circle">${t.done ? '✓' : ''}</div><div><span class="task-title">${t.title}</span><span class="task-time">${t.due_time}</span></div>`;
+                list.appendChild(div);
+            });
+        }
+
+        function handleToggle(id, currentDone, index) {
+            selectedIndex = index;
+            const newStatus = !currentDone;
+            const ts = newStatus ? new Date().toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}) : "";
+            update(ref(db, `tasks/${id}`), { done: newStatus, completedAt: ts });
+        }
+
+        // Keyboard Logic
+        window.addEventListener('keydown', (e) => {
+            if (currentTasks.length === 0) return;
+            if (e.key === 'ArrowDown') {
+                selectedIndex = (selectedIndex + 1) % currentTasks.length;
+                renderTasks();
+            } else if (e.key === 'ArrowUp') {
+                selectedIndex = (selectedIndex - 1 + currentTasks.length) % currentTasks.length;
+                renderTasks();
+            } else if (e.key === 'Enter') {
+                const [id, t] = currentTasks[selectedIndex];
+                const ts = new Date().toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+                update(ref(db, `tasks/${id}`), { done: true, completedAt: ts });
+            } else if (e.key === 'Backspace') {
+                const [id, t] = currentTasks[selectedIndex];
+                update(ref(db, `tasks/${id}`), { done: false, completedAt: "" });
+            }
+        });
+
+        onValue(ref(db, 'events'), (snap) => {
+            const listEl = document.getElementById('event-list');
+            listEl.innerHTML = '';
+            const todayStr = new Date().toISOString().split('T')[0];
+            if (snap.val()) {
+                const todayEvents = Object.values(snap.val()).filter(e => e.date === todayStr);
+                todayEvents.forEach(e => {
+                    listEl.innerHTML += `<div class="event-item"><span>${e.title}</span><span style="color:var(--accent); font-weight:700;">Today</span></div>`;
+                });
+                if(todayEvents.length === 0) listEl.innerHTML = '<p style="color:#475569;">No events today.</p>';
+            }
+        });
+    </script>
+</body>
+</html>
